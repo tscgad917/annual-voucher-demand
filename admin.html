@@ -122,10 +122,58 @@ async function loadSurveys(){
   const actions=document.createElement("div");actions.className="actions";
   const badge=document.createElement("span");badge.className="status "+(s.is_published?"":"off");badge.textContent=s.is_published?"已發布":"草稿";
   const btn=document.createElement("button");btn.className="secondary";btn.textContent="管理問卷";btn.onclick=()=>selectSurvey(s.id);
-  actions.append(badge,btn);row.append(info,actions);$("surveyList").appendChild(row);
+  const renameBtn=document.createElement("button");renameBtn.className="secondary";renameBtn.textContent="修改名稱";renameBtn.onclick=()=>renameSurvey(s.id);
+  const deleteBtn=document.createElement("button");deleteBtn.className="danger";deleteBtn.textContent="刪除問卷";deleteBtn.onclick=()=>deleteSurvey(s.id);
+  actions.append(badge,btn,renameBtn,deleteBtn);row.append(info,actions);$("surveyList").appendChild(row);
   const op=document.createElement("option");op.value=s.id;op.textContent=s.target_year+"年度｜"+s.title;$("copySource").appendChild(op);
  });
  if(!surveys.length)$("surveyList").textContent="目前尚未建立問卷。";
+}
+async function renameSurvey(id){
+ const survey=surveys.find(x=>x.id===id);if(!survey)return;
+ const input=prompt("請輸入新的問卷名稱：",survey.title);
+ if(input===null)return;
+ const title=input.trim();
+ if(!title){alert("問卷名稱不可空白。");return;}
+ if(title.length>120){alert("問卷名稱不可超過120個字。");return;}
+ if(title===survey.title)return;
+ try{
+  const {data,error}=await db.from("general_surveys").update({title,updated_at:new Date().toISOString()}).eq("id",id).select("*").single();
+  if(error)throw error;
+  if(selected&&selected.id===id)selected=data;
+  await loadSurveys();
+  if(selected&&selected.id===id)await selectSurvey(id);
+  note("notice","問卷名稱已更新。","success");
+ }catch(e){alert("修改問卷名稱失敗："+e.message);}
+}
+async function deleteSurvey(id){
+ const survey=surveys.find(x=>x.id===id);if(!survey)return;
+ const {count,error:countError}=await db.from("general_survey_submissions").select("id",{count:"exact",head:true}).eq("survey_id",id);
+ if(countError){alert("無法確認填報紀錄數量，為避免誤刪，已取消刪除。\\n"+countError.message);return;}
+ const confirmed=confirm("確定永久刪除「"+survey.title+"」？\\n\\n此操作無法復原，將一併刪除問卷設定、適用單位、題目、選項、填報紀錄及答案。\\n目前已有 "+(count||0)+" 筆填報紀錄。");
+ if(!confirmed)return;
+ try{
+  const {data:qs,error:qe}=await db.from("general_survey_questions").select("id,image_path").eq("survey_id",id);
+  if(qe)throw qe;
+  const qids=(qs||[]).map(q=>q.id);
+  let optionImages=[];
+  if(qids.length){
+   const {data:opts,error:oe}=await db.from("general_survey_options").select("image_path").in("question_id",qids);
+   if(oe)throw oe;
+   optionImages=(opts||[]).map(o=>o.image_path).filter(Boolean);
+  }
+  const imagePaths=[...(qs||[]).map(q=>q.image_path).filter(Boolean),...optionImages];
+  const {error:de}=await db.from("general_surveys").delete().eq("id",id);
+  if(de)throw de;
+  if(selected&&selected.id===id){selected=null;$("editor").classList.add("hidden");}
+  await loadSurveys();
+  let warning="";
+  if(imagePaths.length){
+   const {error:se}=await db.storage.from(IMAGE_BUCKET).remove([...new Set(imagePaths)]);
+   if(se)warning="問卷資料已刪除，但圖片檔案清理失敗，請檢查 Storage："+se.message;
+  }
+  note("notice",warning||"問卷及所屬資料已刪除。",warning?"error":"success");
+ }catch(e){alert("刪除問卷失敗："+e.message+"\\n請確認權限及資料狀態後再試。");}
 }
 async function createSurvey(){
  const title=$("newTitle").value.trim(),year=Number($("newYear").value),open=$("newOpen").value,close=$("newClose").value;
