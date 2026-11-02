@@ -84,7 +84,9 @@ function renderQuestion(q,value){
       const otherLabel=document.createElement("label");otherLabel.className="option";
       const otherRadio=document.createElement("input");otherRadio.type="radio";otherRadio.name="q_"+q.id;otherRadio.value="__other__";
       otherLabel.appendChild(otherRadio);const otherText=document.createElement("span");otherText.textContent="其他";otherLabel.appendChild(otherText);control.appendChild(otherLabel);
-      const otherInput=document.createElement("input");otherInput.type="text";otherInput.placeholder="請填寫其他需求";otherInput.dataset.otherText="true";otherInput.style.marginTop="8px";otherInput.hidden=true;control.appendChild(otherInput);
+      const otherInput=document.createElement("input");otherInput.type="text";otherInput.placeholder="請填寫其他需求";otherInput.dataset.otherText="true";otherInput.style.marginTop="8px";otherInput.hidden=true;
+      if(value&&typeof value==="object"&&value.choice==="__other__"){otherRadio.checked=true;otherInput.value=value.other||"";otherInput.hidden=false;}
+      control.appendChild(otherInput);
       control.addEventListener("change",()=>{const selected=control.querySelector('input[type="radio"]:checked');otherInput.hidden=!(selected&&selected.value==="__other__");});
     }
   }else{
@@ -133,9 +135,12 @@ async function loadUnitData(){
     const {data,error}=await db.rpc("general_survey_public_info",{p_token:token,p_unit_id:Number(unitId)});
     if(error)throw error;
     if(!data||!data.ok)throw new Error(data?.message||"讀取填報資料失敗。");
-    const alreadySubmitted=data.submission===true;
-    surveyData.questions.forEach(q=>$("questions").appendChild(renderQuestion(q,null)));
-    setMessage(alreadySubmitted?"本單位已有填報紀錄。再次提交將取代原內容，請重新填寫完整資料。":"請填寫本單位本年度預估需求。","success");
+    const previous=data.previous_submission||null;
+    const answerMap=new Map((previous?.answers||[]).map(a=>[a.question_id,a.answer]));
+    if(previous)$("submitter").value=previous.submitter_name||"";
+    surveyData.questions.forEach(q=>$("questions").appendChild(renderQuestion(q,answerMap.has(q.id)?answerMap.get(q.id):null)));
+    $("submitBtn").textContent=previous?"確認更改並送出":"送出填報資料";
+    setMessage(previous?"本單位已有填報紀錄，已帶入上次填寫內容。請由原填寫人確認或修改後再送出。":"請填寫本單位本年度預估需求。","success");
   }catch(e){setMessage(e.message||"讀取資料失敗。","error");}
 }
 async function init(){
