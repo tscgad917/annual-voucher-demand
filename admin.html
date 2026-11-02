@@ -67,7 +67,7 @@ button{border:0;border-radius:7px;background:#44633f;color:#fff;padding:10px 14p
   </div>
   <div class="field" style="margin-top:10px"><label for="qDescription">補充說明／規格</label><textarea id="qDescription" placeholder="例如：規格、尺寸、用途或填報注意事項"></textarea></div>
   <div class="field"><label for="qOptions">選項（單選／多選題使用，每行一個選項）</label><textarea id="qOptions" placeholder="選項一&#10;選項二&#10;選項三"></textarea></div>
-  <div class="actions"><label class="check"><input id="qRequired" type="checkbox"> 必填題目</label><label class="check"><input id="qAllowOther" type="checkbox"> 單選題允許填寫其他內容</label><button id="addQuestion">新增題目</button></div>
+  <div class="actions"><label class="check"><input id="qRequired" type="checkbox"> 必填題目</label><label class="check"><input id="qAllowOther" type="checkbox"> 單選題允許填寫其他內容</label><button id="addQuestion">新增題目</button><button id="cancelQuestionEdit" class="secondary hidden" type="button">取消編輯</button></div>
   <div id="questionMessage" class="hint"></div>
   <div id="questionList" style="margin-top:12px"></div>
   <hr style="border:0;border-top:1px solid #e5ebe4;margin:18px 0">
@@ -86,6 +86,7 @@ const IMAGE_BUCKET="general-survey-images";
 const db=window.supabase.createClient(URL,KEY);
 const $=id=>document.getElementById(id);
 let currentUser=null, units=[], surveys=[], selected=null, questions=[], assignments=[], submissions=[];
+let editingQuestionId=null;
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function note(id,msg,type){$(id).className="hint "+(type||"");$(id).textContent=msg||"";}
 function localInputValue(d){const x=new Date(d);return x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0")+"T"+String(x.getHours()).padStart(2,"0")+":"+String(x.getMinutes()).padStart(2,"0");}
@@ -257,26 +258,76 @@ async function saveUnits(){
   assignments=ids;note("unitMessage","已儲存 "+ids.length+" 個填報單位。","success");await loadResults();
  }catch(e){note("unitMessage","儲存失敗："+e.message,"error");}
 }
+function cancelQuestionEdit(showNote=true){
+ editingQuestionId=null;
+ $("qTitle").value="";$("qDescription").value="";$("qUnit").value="";$("qOptions").value="";$("qImage").value="";
+ $("qRequired").checked=false;$("qAllowOther").checked=false;$("qType").value="number";
+ $("addQuestion").textContent="新增題目";$("cancelQuestionEdit").classList.add("hidden");
+ if(showNote)note("questionMessage","已取消編輯。","");
+}
 async function addQuestion(){
  const title=$("qTitle").value.trim(),type=$("qType").value;
  if(!title){note("questionMessage","請輸入題目或品項名稱。","error");return;}
- const optionsText=$("qOptions").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+ const optionsText=$("qOptions").value.split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean);
  if((type==="single_choice"||type==="multiple_choice")&&!optionsText.length){note("questionMessage","單選或多選題至少需要一個選項。","error");return;}
- $("addQuestion").disabled=true;
+ const btn=$("addQuestion");btn.disabled=true;let imagePath=null;
  try{
-  let imagePath=null;const file=$("qImage").files[0];
+  const file=$("qImage").files[0];
   if(file){
    if(!["image/jpeg","image/png","image/webp"].includes(file.type))throw new Error("圖片僅支援 JPG、PNG、WEBP。");
    if(file.size>5*1024*1024)throw new Error("圖片不可超過 5 MB。");
-   const path=selected.id+"/"+crypto.randomUUID()+"-"+file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
-   const {error:up}=await db.storage.from(IMAGE_BUCKET).upload(path,file,{upsert:false,contentType:file.type});if(up)throw up;imagePath=path;
+   imagePath=selected.id+"/"+crypto.randomUUID()+"-"+file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
+   const {error:up}=await db.storage.from(IMAGE_BUCKET).upload(imagePath,file,{upsert:false,contentType:file.type});if(up)throw up;
   }
-  const {data:q,error}=await db.from("general_survey_questions").insert({survey_id:selected.id,sort_order:questions.length+1,title,description:$("qDescription").value.trim(),question_type:type,is_required:$("qRequired").checked,image_path:imagePath,settings:{unit_label:$("qUnit").value.trim(),min:0,step:1,allow_other:$("qAllowOther").checked}}).select("*").single();if(error)throw error;
-  if(optionsText.length){const {error:oe}=await db.from("general_survey_options").insert(optionsText.map((label,i)=>({question_id:q.id,sort_order:i+1,label,value:label})));if(oe)throw oe;}
-  $("qTitle").value="";$("qDescription").value="";$("qUnit").value="";$("qOptions").value="";$("qImage").value="";$("qRequired").checked=false;$("qAllowOther").checked=false;
-  note("questionMessage","題目已新增。","success");await loadQuestions();
- }catch(e){note("questionMessage","新增失敗："+e.message,"error");}
- finally{$("addQuestion").disabled=false;}
+  if(editingQuestionId){
+   const q=questions.find(x=>x.id===editingQuestionId);if(!q)throw new Error("找不到要編輯的題目，請重新載入。");
+   const [{data:oldOptions,error:oe},{data:answerRows,error:ae}]=await Promise.all([
+    db.from("general_survey_options").select("*").eq("question_id",q.id).order("sort_order"),
+    db.from("general_survey_answers").select("answer").eq("question_id",q.id)
+   ]);
+   if(oe)throw oe;if(ae)throw ae;
+   if((answerRows||[]).length&&type!==q.question_type)throw new Error("此題已有單位填報，為避免既有答案無法辨識，目前不能變更題型。請維持原題型，只修改題目文字、說明或選項。");
+   const usedValues=new Set();
+   const collectValues=v=>{
+    if(typeof v==="string")usedValues.add(v);
+    else if(Array.isArray(v))v.forEach(collectValues);
+    else if(v&&typeof v==="object"){if(typeof v.choice==="string")usedValues.add(v.choice);if(typeof v.value==="string")usedValues.add(v.value);}
+   };
+   (answerRows||[]).forEach(x=>collectValues(x.answer));
+   if(type==="single_choice"||type==="multiple_choice"){
+    const missing=[...usedValues].filter(v=>v!=="__other__"&&!optionsText.includes(v));
+    if(missing.length)throw new Error("以下選項已有單位填報，不能直接移除或改名：\\n"+missing.join("、")+"\\n請保留這些選項，再新增其他選項。");
+    const keepIds=[];
+    for(let i=0;i<optionsText.length;i++){
+     const label=optionsText[i],existing=(oldOptions||[]).find(o=>o.value===label||o.label===label);
+     if(existing){
+      const {error:up}=await db.from("general_survey_options").update({label,sort_order:i+1}).eq("id",existing.id);if(up)throw up;
+      keepIds.push(existing.id);
+     }else{
+      const {data:created,error:ins}=await db.from("general_survey_options").insert({question_id:q.id,sort_order:i+1,label,value:label}).select("id").single();if(ins)throw ins;keepIds.push(created.id);
+     }
+    }
+    const removeIds=(oldOptions||[]).filter(o=>!keepIds.includes(o.id)).map(o=>o.id);
+    if(removeIds.length){const {error:de}=await db.from("general_survey_options").delete().in("id",removeIds);if(de)throw de;}
+   }else if((oldOptions||[]).length){
+    if((answerRows||[]).length)throw new Error("此題已有填報紀錄，不能將選擇題改成其他題型。");
+    const {error:de}=await db.from("general_survey_options").delete().eq("question_id",q.id);if(de)throw de;
+   }
+   const patch={title,description:$("qDescription").value.trim(),question_type:type,is_required:$("qRequired").checked,settings:{...(q.settings||{}),unit_label:$("qUnit").value.trim(),min:0,step:1,allow_other:$("qAllowOther").checked}};
+   if(imagePath)patch.image_path=imagePath;
+   const {error:ue}=await db.from("general_survey_questions").update(patch).eq("id",q.id);if(ue)throw ue;
+   if(imagePath&&q.image_path)await db.storage.from(IMAGE_BUCKET).remove([q.image_path]);
+   cancelQuestionEdit(false);note("questionMessage","題目已更新；既有填報紀錄及答案已保留。","success");
+  }else{
+   const {data:q,error}=await db.from("general_survey_questions").insert({survey_id:selected.id,sort_order:questions.length+1,title,description:$("qDescription").value.trim(),question_type:type,is_required:$("qRequired").checked,image_path:imagePath,settings:{unit_label:$("qUnit").value.trim(),min:0,step:1,allow_other:$("qAllowOther").checked}}).select("*").single();if(error)throw error;
+   if(optionsText.length){const {error:oe}=await db.from("general_survey_options").insert(optionsText.map((label,i)=>({question_id:q.id,sort_order:i+1,label,value:label})));if(oe)throw oe;}
+   cancelQuestionEdit(false);note("questionMessage","題目已新增。","success");
+  }
+  await loadQuestions();await loadResults();
+ }catch(e){
+  if(imagePath)await db.storage.from(IMAGE_BUCKET).remove([imagePath]);
+  note("questionMessage",(editingQuestionId?"修改":"新增")+"失敗："+e.message,"error");
+ }finally{btn.disabled=false;}
 }
 async function loadQuestions(){
  const {data,error}=await db.from("general_survey_questions").select("*").eq("survey_id",selected.id).order("sort_order").order("created_at");if(error)throw error;questions=data||[];
@@ -301,8 +352,21 @@ async function loadQuestions(){
    }catch(e){alert("圖片上傳失敗："+e.message);}
    finally{uploadBtn.disabled=false;}
   };
-  const del=document.createElement("button");del.className="danger";del.textContent="刪除";del.onclick=async()=>{if(!confirm("確定刪除此題目？既有填答答案也會一併刪除。"))return;const {error:e}=await db.from("general_survey_questions").delete().eq("id",q.id);if(e){alert("刪除失敗："+e.message);return;}await loadQuestions();await loadResults();};
-  const controls=document.createElement("div");controls.className="actions";controls.append(upload,uploadBtn,del);row.appendChild(controls);$("questionList").appendChild(row);
+  const edit=document.createElement("button");edit.className="secondary";edit.textContent="編輯題目";edit.onclick=async()=>{
+ try{
+  const {data:opts,error:oe}=await db.from("general_survey_options").select("label").eq("question_id",q.id).order("sort_order");if(oe)throw oe;
+  editingQuestionId=q.id;
+  $("qTitle").value=q.title||"";$("qDescription").value=q.description||"";
+  $("qType").value=q.question_type||"number";$("qUnit").value=q.settings?.unit_label||"";
+  $("qOptions").value=(opts||[]).map(o=>o.label).join("\\n");
+  $("qRequired").checked=!!q.is_required;$("qAllowOther").checked=!!q.settings?.allow_other;
+  $("qImage").value="";$("addQuestion").textContent="儲存題目修改";$("cancelQuestionEdit").classList.remove("hidden");
+  note("questionMessage","正在編輯「"+q.title+"」。修改後按「儲存題目修改」；不選圖片即保留原圖片。","success");
+  $("qTitle").scrollIntoView({behavior:"smooth",block:"center"});$("qTitle").focus();
+ }catch(e){alert("載入題目資料失敗："+e.message);}
+};
+const del=document.createElement("button");del.className="danger";del.textContent="刪除";del.onclick=async()=>{if(!confirm("確定刪除此題目？既有填答答案也會一併刪除。"))return;const {error:e}=await db.from("general_survey_questions").delete().eq("id",q.id);if(e){alert("刪除失敗："+e.message);return;}await loadQuestions();await loadResults();};
+  const controls=document.createElement("div");controls.className="actions";controls.append(edit,upload,uploadBtn,del);row.appendChild(controls);$("questionList").appendChild(row);
  }
  if(!questions.length)$("questionList").textContent="尚未新增題目。";
 }
@@ -392,6 +456,7 @@ $("selectAllUnits").addEventListener("click",()=> $("unitChecks").querySelectorA
 $("clearUnits").addEventListener("click",()=> $("unitChecks").querySelectorAll("input").forEach(x=>x.checked=false));
 $("saveUnits").addEventListener("click",saveUnits);
 $("addQuestion").addEventListener("click",addQuestion);
+$("cancelQuestionEdit").addEventListener("click",()=>cancelQuestionEdit());
 $("togglePublish").addEventListener("click",togglePublish);
 $("saveSchedule").addEventListener("click",saveSchedule);
 $("exportCsv").addEventListener("click",exportCsv);
