@@ -46,6 +46,12 @@ button{border:0;border-radius:7px;background:#44633f;color:#fff;padding:10px 14p
   <div class="actions" style="justify-content:space-between;align-items:flex-start"><div><h2 id="editTitle" style="margin-bottom:4px">問卷設定</h2><div id="editMeta" class="muted"></div></div><div class="actions"><span id="publishState" class="status off">未發布</span><button id="togglePublish">發布問卷</button></div></div>
   <div class="actions" style="margin:12px 0"><input id="publicUrl" readonly style="flex:1;min-width:220px"><button id="copyUrl" class="secondary">複製填答網址</button></div>
   <div class="hint" id="publishHint">發布後，填答者可於設定期間透過網址填寫；截止後資料自動停止受理。</div>
+  <div class="grid" style="margin-top:12px">
+    <div class="field"><label for="editOpen">問卷開放時間</label><input id="editOpen" type="datetime-local"></div>
+    <div class="field"><label for="editClose">問卷截止時間</label><input id="editClose" type="datetime-local"></div>
+  </div>
+  <div class="actions" style="margin-top:9px"><button id="saveSchedule">儲存開放時間</button><span class="hint">可隨時調整開放及截止時間；截止時間須晚於開放時間。</span></div>
+  <div id="scheduleMessage" class="hint"></div>
   <hr style="border:0;border-top:1px solid #e5ebe4;margin:18px 0">
   <h2>指定填報單位</h2>
   <div class="actions" style="margin-bottom:9px"><button class="secondary" id="selectAllUnits">全選</button><button class="secondary" id="clearUnits">清除</button><button id="saveUnits">儲存填報單位</button></div>
@@ -209,10 +215,31 @@ async function copySurvey(){
   await loadSurveys();await selectSurvey(clone.id);note("createMessage","已複製上一份問卷的題目、圖片設定及填報單位；年度與開放期間已另行設定。","success");
  }catch(e){alert("複製失敗："+e.message);}
 }
+async function saveSchedule(){
+ if(!selected)return;
+ const open=$("editOpen").value,close=$("editClose").value;
+ if(!open||!close){note("scheduleMessage","請完整設定開放時間及截止時間。","error");return;}
+ if(new Date(close)<=new Date(open)){note("scheduleMessage","截止時間必須晚於開放時間。","error");return;}
+ const btn=$("saveSchedule");btn.disabled=true;
+ try{
+  const {data,error}=await db.from("general_surveys").update({
+   opens_at:new Date(open).toISOString(),
+   closes_at:new Date(close).toISOString(),
+   updated_at:new Date().toISOString()
+  }).eq("id",selected.id).select("*").single();
+  if(error)throw error;
+  selected=data;
+  await loadSurveys();
+  await selectSurvey(data.id);
+  note("scheduleMessage","問卷開放及截止時間已更新。","success");
+ }catch(e){note("scheduleMessage","儲存時間設定失敗："+e.message,"error");}
+ finally{btn.disabled=false;}
+}
 async function selectSurvey(id){
  const s=surveys.find(x=>x.id===id);if(!s)return;selected=s;$("editor").classList.remove("hidden");
  $("editTitle").textContent=s.title;$("editMeta").textContent=s.target_year+"年度｜"+new Date(s.opens_at).toLocaleString("zh-TW")+" 至 "+new Date(s.closes_at).toLocaleString("zh-TW");
  $("publicUrl").value=location.origin+location.pathname.replace(/admin\.html$/,"")+"?token="+s.public_token;
+ $("editOpen").value=localInputValue(s.opens_at);$("editClose").value=localInputValue(s.closes_at);note("scheduleMessage","","");
  $("publishState").textContent=s.is_published?"已發布":"未發布";$("publishState").className="status "+(s.is_published?"":"off");$("togglePublish").textContent=s.is_published?"停止發布":"發布問卷";
  await Promise.all([loadAssignments(),loadQuestions(),loadResults()]);
 }
@@ -366,6 +393,7 @@ $("clearUnits").addEventListener("click",()=> $("unitChecks").querySelectorAll("
 $("saveUnits").addEventListener("click",saveUnits);
 $("addQuestion").addEventListener("click",addQuestion);
 $("togglePublish").addEventListener("click",togglePublish);
+$("saveSchedule").addEventListener("click",saveSchedule);
 $("exportCsv").addEventListener("click",exportCsv);
 $("copyUrl").addEventListener("click",async()=>{try{await navigator.clipboard.writeText($("publicUrl").value);note("publishHint","已複製填答網址。","success");}catch(e){$("publicUrl").select();document.execCommand("copy");note("publishHint","已複製填答網址。","success");}});
 init().catch(e=>{console.error(e);$("identity").textContent="登入或初始化失敗";note("notice",e.message||String(e),"error");});
