@@ -301,7 +301,7 @@ async function addQuestion(){
     for(let i=0;i<optionsText.length;i++){
      const label=optionsText[i],existing=(oldOptions||[]).find(o=>o.value===label||o.label===label);
      if(existing){
-      const {error:up}=await db.from("general_survey_options").update({label,sort_order:i+1}).eq("id",existing.id);if(up)throw up;
+      const {error:up}=await db.from("general_survey_options").update({label,value:usedValues.has(existing.value)?existing.value:label,sort_order:i+1}).eq("id",existing.id);if(up)throw up;
       keepIds.push(existing.id);
      }else{
       const {data:created,error:ins}=await db.from("general_survey_options").insert({question_id:q.id,sort_order:i+1,label,value:label}).select("id").single();if(ins)throw ins;keepIds.push(created.id);
@@ -316,10 +316,12 @@ async function addQuestion(){
    const patch={title,description:$("qDescription").value.trim(),question_type:type,is_required:$("qRequired").checked,settings:{...(q.settings||{}),unit_label:$("qUnit").value.trim(),min:0,step:1,allow_other:$("qAllowOther").checked}};
    if(imagePath)patch.image_path=imagePath;
    const {error:ue}=await db.from("general_survey_questions").update(patch).eq("id",q.id);if(ue)throw ue;
-   if(imagePath&&q.image_path)await db.storage.from(IMAGE_BUCKET).remove([q.image_path]);
+   imagePath=null;
+   if(patch.image_path&&q.image_path)await db.storage.from(IMAGE_BUCKET).remove([q.image_path]);
    cancelQuestionEdit(false);note("questionMessage","題目已更新；既有填報紀錄及答案已保留。","success");
   }else{
    const {data:q,error}=await db.from("general_survey_questions").insert({survey_id:selected.id,sort_order:questions.length+1,title,description:$("qDescription").value.trim(),question_type:type,is_required:$("qRequired").checked,image_path:imagePath,settings:{unit_label:$("qUnit").value.trim(),min:0,step:1,allow_other:$("qAllowOther").checked}}).select("*").single();if(error)throw error;
+   imagePath=null;
    if(optionsText.length){const {error:oe}=await db.from("general_survey_options").insert(optionsText.map((label,i)=>({question_id:q.id,sort_order:i+1,label,value:label})));if(oe)throw oe;}
    cancelQuestionEdit(false);note("questionMessage","題目已新增。","success");
   }
