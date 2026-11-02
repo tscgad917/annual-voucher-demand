@@ -1,8 +1,14 @@
--- 總務課通用問卷平台：資料表、權限及公開填答 RPC
+
+-- 年度大量傳票需求系統：資料表、權限及公開填答 RPC
 -- 請在主 Supabase 專案 onebxqajsiqmhfcizaxl 的 SQL Editor 執行一次。
 -- 不修改既有庫存、傳票耗材、紙張需求及活動報名資料表。
 
 create extension if not exists pgcrypto;
+
+-- =====================================================
+-- 一、管理員權限驗證
+-- 沿用既有 admin_authorizations
+-- =====================================================
 
 create or replace function public.is_general_survey_admin()
 returns boolean
@@ -19,6 +25,10 @@ as $$
   );
 $$;
 
+-- =====================================================
+-- 二、年度問卷主資料表
+-- =====================================================
+
 create table if not exists public.general_surveys (
   id uuid primary key default gen_random_uuid(),
   title text not null,
@@ -34,11 +44,20 @@ create table if not exists public.general_surveys (
   constraint general_surveys_dates_check check (closes_at > opens_at)
 );
 
+-- =====================================================
+-- 三、問卷適用單位
+-- unit_id 使用 bigint，與既有 units.id 型態一致
+-- =====================================================
+
 create table if not exists public.general_survey_units (
   survey_id uuid not null references public.general_surveys(id) on delete cascade,
-  unit_id integer not null references public.units(id) on delete restrict,
+  unit_id bigint not null references public.units(id) on delete restrict,
   primary key (survey_id, unit_id)
 );
+
+-- =====================================================
+-- 四、問卷題目
+-- =====================================================
 
 create table if not exists public.general_survey_questions (
   id uuid primary key default gen_random_uuid(),
@@ -54,6 +73,10 @@ create table if not exists public.general_survey_questions (
   created_at timestamptz not null default now()
 );
 
+-- =====================================================
+-- 五、問卷選項
+-- =====================================================
+
 create table if not exists public.general_survey_options (
   id uuid primary key default gen_random_uuid(),
   question_id uuid not null references public.general_survey_questions(id) on delete cascade,
@@ -63,15 +86,24 @@ create table if not exists public.general_survey_options (
   image_path text
 );
 
+-- =====================================================
+-- 六、單位填報紀錄
+-- 每個問卷、每個單位只保留一筆最新提交紀錄
+-- =====================================================
+
 create table if not exists public.general_survey_submissions (
   id uuid primary key default gen_random_uuid(),
   survey_id uuid not null references public.general_surveys(id) on delete cascade,
-  unit_id integer not null references public.units(id) on delete restrict,
+  unit_id bigint not null references public.units(id) on delete restrict,
   submitter_name text not null,
   submitted_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
   unique (survey_id, unit_id)
 );
+
+-- =====================================================
+-- 七、問卷填報答案
+-- =====================================================
 
 create table if not exists public.general_survey_answers (
   id uuid primary key default gen_random_uuid(),
@@ -82,10 +114,25 @@ create table if not exists public.general_survey_answers (
   unique (submission_id, question_id)
 );
 
-create index if not exists idx_general_surveys_year on public.general_surveys(target_year desc);
-create index if not exists idx_general_survey_questions_survey on public.general_survey_questions(survey_id, sort_order);
-create index if not exists idx_general_survey_submissions_survey on public.general_survey_submissions(survey_id, unit_id);
-create index if not exists idx_general_survey_answers_submission on public.general_survey_answers(submission_id);
+-- =====================================================
+-- 八、索引
+-- =====================================================
+
+create index if not exists idx_general_surveys_year
+on public.general_surveys(target_year desc);
+
+create index if not exists idx_general_survey_questions_survey
+on public.general_survey_questions(survey_id, sort_order);
+
+create index if not exists idx_general_survey_submissions_survey
+on public.general_survey_submissions(survey_id, unit_id);
+
+create index if not exists idx_general_survey_answers_submission
+on public.general_survey_answers(submission_id);
+
+-- =====================================================
+-- 九、啟用資料表 RLS
+-- =====================================================
 
 alter table public.general_surveys enable row level security;
 alter table public.general_survey_units enable row level security;
@@ -93,6 +140,10 @@ alter table public.general_survey_questions enable row level security;
 alter table public.general_survey_options enable row level security;
 alter table public.general_survey_submissions enable row level security;
 alter table public.general_survey_answers enable row level security;
+
+-- =====================================================
+-- 十、管理員資料表存取政策
+-- =====================================================
 
 drop policy if exists general_surveys_admin_all on public.general_surveys;
 create policy general_surveys_admin_all on public.general_surveys
@@ -130,6 +181,10 @@ for all to authenticated
 using (public.is_general_survey_admin())
 with check (public.is_general_survey_admin());
 
+-- =====================================================
+-- 十一、授予管理員資料表權限
+-- =====================================================
+
 grant select, insert, update, delete on public.general_surveys to authenticated;
 grant select, insert, update, delete on public.general_survey_units to authenticated;
 grant select, insert, update, delete on public.general_survey_questions to authenticated;
@@ -137,31 +192,69 @@ grant select, insert, update, delete on public.general_survey_options to authent
 grant select, insert, update, delete on public.general_survey_submissions to authenticated;
 grant select, insert, update, delete on public.general_survey_answers to authenticated;
 
--- 品項示意圖片不是社員個資，採公開唯讀圖片桶；只有已登入且獲授權管理員可上傳、修改、刪除。
-insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('general-survey-images', 'general-survey-images', true, 5242880, array['image/jpeg','image/png','image/webp'])
+-- =====================================================
+-- 十二、建立品項示意圖片 Storage Bucket
+-- 僅存放一般傳票、印刷品示意圖片
+-- 不得存放社員印鑑卡或其他個人機密資料
+-- =====================================================
+
+insert into storage.buckets (
+  id,
+  name,
+  public,
+  file_size_limit,
+  allowed_mime_types
+)
+values (
+  'general-survey-images',
+  'general-survey-images',
+  true,
+  5242880,
+  array['image/jpeg','image/png','image/webp']
+)
 on conflict (id) do update
-set public = true, file_size_limit = 5242880, allowed_mime_types = array['image/jpeg','image/png','image/webp'];
+set
+  public = true,
+  file_size_limit = 5242880,
+  allowed_mime_types = array['image/jpeg','image/png','image/webp'];
 
 drop policy if exists general_survey_images_admin_insert on storage.objects;
 create policy general_survey_images_admin_insert on storage.objects
 for insert to authenticated
-with check (bucket_id = 'general-survey-images' and public.is_general_survey_admin());
+with check (
+  bucket_id = 'general-survey-images'
+  and public.is_general_survey_admin()
+);
 
 drop policy if exists general_survey_images_admin_update on storage.objects;
 create policy general_survey_images_admin_update on storage.objects
 for update to authenticated
-using (bucket_id = 'general-survey-images' and public.is_general_survey_admin())
-with check (bucket_id = 'general-survey-images' and public.is_general_survey_admin());
+using (
+  bucket_id = 'general-survey-images'
+  and public.is_general_survey_admin()
+)
+with check (
+  bucket_id = 'general-survey-images'
+  and public.is_general_survey_admin()
+);
 
 drop policy if exists general_survey_images_admin_delete on storage.objects;
 create policy general_survey_images_admin_delete on storage.objects
 for delete to authenticated
-using (bucket_id = 'general-survey-images' and public.is_general_survey_admin());
+using (
+  bucket_id = 'general-survey-images'
+  and public.is_general_survey_admin()
+);
+
+-- =====================================================
+-- 十三、公開問卷資訊 RPC
+-- 僅於問卷發布且開放期間提供單位及題目資訊
+-- 不回傳任何既有填報答案
+-- =====================================================
 
 create or replace function public.general_survey_public_info(
   p_token uuid,
-  p_unit_id integer default null
+  p_unit_id bigint default null
 )
 returns jsonb
 language plpgsql
@@ -177,7 +270,10 @@ begin
   where public_token = p_token;
 
   if not found then
-    return jsonb_build_object('ok', false, 'message', '找不到此問卷，請確認連結是否正確。');
+    return jsonb_build_object(
+      'ok', false,
+      'message', '找不到此問卷，請確認連結是否正確。'
+    );
   end if;
 
   select jsonb_build_object(
@@ -197,7 +293,10 @@ begin
       and now() <= v_survey.closes_at
     ),
     'units', coalesce((
-      select jsonb_agg(jsonb_build_object('id', u.id, 'name', u.name) order by u.id)
+      select jsonb_agg(
+        jsonb_build_object('id', u.id, 'name', u.name)
+        order by u.id
+      )
       from public.general_survey_units su
       join public.units u on u.id = su.unit_id
       where su.survey_id = v_survey.id
@@ -217,14 +316,21 @@ begin
           'image_path', q.image_path,
           'settings', q.settings,
           'options', coalesce((
-            select jsonb_agg(jsonb_build_object(
-              'id', o.id, 'label', o.label, 'value', o.value,
-              'image_path', o.image_path, 'sort_order', o.sort_order
-            ) order by o.sort_order)
+            select jsonb_agg(
+              jsonb_build_object(
+                'id', o.id,
+                'label', o.label,
+                'value', o.value,
+                'image_path', o.image_path,
+                'sort_order', o.sort_order
+              )
+              order by o.sort_order
+            )
             from public.general_survey_options o
             where o.question_id = q.id
           ), '[]'::jsonb)
-        ) order by q.sort_order, q.created_at
+        )
+        order by q.sort_order, q.created_at
       )
       from public.general_survey_questions q
       where q.survey_id = v_survey.id
@@ -232,27 +338,41 @@ begin
         and now() >= v_survey.opens_at
         and now() <= v_survey.closes_at
     ), '[]'::jsonb),
-    'submission', case when p_unit_id is null then null else exists (
-      select 1
-      from public.general_survey_submissions s
-      where s.survey_id = v_survey.id and s.unit_id = p_unit_id
-    ) end
+    'submission', case
+      when p_unit_id is null then null
+      else exists (
+        select 1
+        from public.general_survey_submissions s
+        where s.survey_id = v_survey.id
+          and s.unit_id = p_unit_id
+      )
+    end
   ) into v_result;
 
   if p_unit_id is not null and not exists (
-    select 1 from public.general_survey_units
-    where survey_id = v_survey.id and unit_id = p_unit_id
+    select 1
+    from public.general_survey_units
+    where survey_id = v_survey.id
+      and unit_id = p_unit_id
   ) then
-    return jsonb_build_object('ok', false, 'message', '此單位不在本問卷填報範圍內。');
+    return jsonb_build_object(
+      'ok', false,
+      'message', '此單位不在本問卷填報範圍內。'
+    );
   end if;
 
   return v_result;
 end;
 $$;
 
+-- =====================================================
+-- 十四、公開問卷提交 RPC
+-- 同一單位再次提交時，以最後一次完整填報為準
+-- =====================================================
+
 create or replace function public.general_survey_submit(
   p_token uuid,
-  p_unit_id integer,
+  p_unit_id bigint,
   p_submitter_name text,
   p_answers jsonb
 )
@@ -273,42 +393,71 @@ begin
   where public_token = p_token;
 
   if not found then
-    return jsonb_build_object('ok', false, 'message', '找不到此問卷。');
+    return jsonb_build_object(
+      'ok', false,
+      'message', '找不到此問卷。'
+    );
   end if;
 
-  if not v_survey.is_published or now() < v_survey.opens_at or now() > v_survey.closes_at then
-    return jsonb_build_object('ok', false, 'message', '目前不在問卷開放填報期間。');
+  if not v_survey.is_published
+     or now() < v_survey.opens_at
+     or now() > v_survey.closes_at then
+    return jsonb_build_object(
+      'ok', false,
+      'message', '目前不在問卷開放填報期間。'
+    );
   end if;
 
   if not exists (
-    select 1 from public.general_survey_units
-    where survey_id = v_survey.id and unit_id = p_unit_id
+    select 1
+    from public.general_survey_units
+    where survey_id = v_survey.id
+      and unit_id = p_unit_id
   ) then
-    return jsonb_build_object('ok', false, 'message', '此單位不在本問卷填報範圍內。');
+    return jsonb_build_object(
+      'ok', false,
+      'message', '此單位不在本問卷填報範圍內。'
+    );
   end if;
 
   if nullif(trim(coalesce(p_submitter_name, '')), '') is null then
-    return jsonb_build_object('ok', false, 'message', '請填寫填報人姓名。');
+    return jsonb_build_object(
+      'ok', false,
+      'message', '請填寫填報人姓名。'
+    );
   end if;
 
   if coalesce(jsonb_typeof(p_answers), '') <> 'array' then
-    return jsonb_build_object('ok', false, 'message', '填報資料格式不正確。');
+    return jsonb_build_object(
+      'ok', false,
+      'message', '填報資料格式不正確。'
+    );
   end if;
 
   -- 僅接受本問卷所屬題目，避免任意寫入其他問卷資料。
-  for v_item in select value from jsonb_array_elements(p_answers)
+  for v_item in
+    select value
+    from jsonb_array_elements(p_answers)
   loop
     begin
       v_question_id := (v_item ->> 'question_id')::uuid;
     exception when others then
-      return jsonb_build_object('ok', false, 'message', '題目識別資料不正確。');
+      return jsonb_build_object(
+        'ok', false,
+        'message', '題目識別資料不正確。'
+      );
     end;
 
     if not exists (
-      select 1 from public.general_survey_questions
-      where id = v_question_id and survey_id = v_survey.id
+      select 1
+      from public.general_survey_questions
+      where id = v_question_id
+        and survey_id = v_survey.id
     ) then
-      return jsonb_build_object('ok', false, 'message', '填報內容包含不屬於本問卷的題目。');
+      return jsonb_build_object(
+        'ok', false,
+        'message', '填報內容包含不屬於本問卷的題目。'
+      );
     end if;
   end loop;
 
@@ -316,7 +465,8 @@ begin
   if exists (
     select 1
     from public.general_survey_questions q
-    where q.survey_id = v_survey.id and q.is_required = true
+    where q.survey_id = v_survey.id
+      and q.is_required = true
       and not exists (
         select 1
         from jsonb_array_elements(p_answers) as answer_item(value)
@@ -328,35 +478,75 @@ begin
           and not (
             jsonb_typeof(answer_item.value -> 'answer') = 'object'
             and answer_item.value -> 'answer' ->> 'choice' = '__other__'
-            and nullif(trim(answer_item.value -> 'answer' ->> 'other'), '') is null
+            and nullif(
+              trim(answer_item.value -> 'answer' ->> 'other'),
+              ''
+            ) is null
           )
       )
   ) then
-    return jsonb_build_object('ok', false, 'message', '尚有必填題目未完成。');
+    return jsonb_build_object(
+      'ok', false,
+      'message', '尚有必填題目未完成。'
+    );
   end if;
 
-  insert into public.general_survey_submissions (survey_id, unit_id, submitter_name, submitted_at)
-  values (v_survey.id, p_unit_id, trim(p_submitter_name), now())
+  insert into public.general_survey_submissions (
+    survey_id,
+    unit_id,
+    submitter_name,
+    submitted_at
+  )
+  values (
+    v_survey.id,
+    p_unit_id,
+    trim(p_submitter_name),
+    now()
+  )
   on conflict (survey_id, unit_id)
-  do update set submitter_name = excluded.submitter_name, submitted_at = now()
+  do update set
+    submitter_name = excluded.submitter_name,
+    submitted_at = now()
   returning id into v_submission_id;
 
-  delete from public.general_survey_answers where submission_id = v_submission_id;
+  -- 清除該單位上次答案，再寫入本次完整答案。
+  delete from public.general_survey_answers
+  where submission_id = v_submission_id;
 
-  for v_item in select value from jsonb_array_elements(p_answers)
+  for v_item in
+    select value
+    from jsonb_array_elements(p_answers)
   loop
     v_question_id := (v_item ->> 'question_id')::uuid;
     v_answer := v_item -> 'answer';
-    insert into public.general_survey_answers (submission_id, question_id, answer)
-    values (v_submission_id, v_question_id, v_answer);
+
+    insert into public.general_survey_answers (
+      submission_id,
+      question_id,
+      answer
+    )
+    values (
+      v_submission_id,
+      v_question_id,
+      v_answer
+    );
   end loop;
 
-  return jsonb_build_object('ok', true, 'message', '填報資料已成功送出。', 'submitted_at', now());
+  return jsonb_build_object(
+    'ok', true,
+    'message', '填報資料已成功送出。',
+    'submitted_at', now()
+  );
 end;
 $$;
 
-revoke all on function public.general_survey_public_info(uuid, integer) from public;
-revoke all on function public.general_survey_submit(uuid, integer, text, jsonb) from public;
-grant execute on function public.general_survey_public_info(uuid, integer) to anon, authenticated;
-grant execute on function public.general_survey_submit(uuid, integer, text, jsonb) to anon, authenticated;
+-- =====================================================
+-- 十五、公開 RPC 函數執行權限
+-- 注意：函數簽章必須與 bigint 參數一致
+-- =====================================================
 
+revoke all on function public.general_survey_public_info(uuid, bigint) from public;
+revoke all on function public.general_survey_submit(uuid, bigint, text, jsonb) from public;
+
+grant execute on function public.general_survey_public_info(uuid, bigint) to anon, authenticated;
+grant execute on function public.general_survey_submit(uuid, bigint, text, jsonb) to anon, authenticated;
