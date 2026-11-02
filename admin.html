@@ -46,6 +46,9 @@ button{border:0;border-radius:7px;background:#44633f;color:#fff;padding:10px 14p
   <div class="actions" style="justify-content:space-between;align-items:flex-start"><div><h2 id="editTitle" style="margin-bottom:4px">問卷設定</h2><div id="editMeta" class="muted"></div></div><div class="actions"><span id="publishState" class="status off">未發布</span><button id="togglePublish">發布問卷</button></div></div>
   <div class="actions" style="margin:12px 0"><input id="publicUrl" readonly style="flex:1;min-width:220px"><button id="copyUrl" class="secondary">複製填答網址</button></div>
   <div class="hint" id="publishHint">發布後，填答者可於設定期間透過網址填寫；截止後資料自動停止受理。</div>
+  <div class="field" style="margin-top:12px"><label for="editDescription">填報說明</label><textarea id="editDescription" placeholder="請輸入填報說明"></textarea></div>
+  <div class="actions" style="margin-top:8px"><button id="saveDescription">儲存填報說明</button><span class="hint">修改後會同步更新公開填報頁面；已發布問卷無須先停止發布。</span></div>
+  <div id="descriptionMessage" class="hint"></div>
   <div class="grid" style="margin-top:12px">
     <div class="field"><label for="editOpen">問卷開放時間</label><input id="editOpen" type="datetime-local"></div>
     <div class="field"><label for="editClose">問卷截止時間</label><input id="editClose" type="datetime-local"></div>
@@ -236,11 +239,27 @@ async function saveSchedule(){
  }catch(e){note("scheduleMessage","儲存時間設定失敗："+e.message,"error");}
  finally{btn.disabled=false;}
 }
+async function saveDescription(){
+ if(!selected)return;
+ const description=$("editDescription").value.trim();
+ const btn=$("saveDescription");btn.disabled=true;
+ try{
+  const {data,error}=await db.from("general_surveys").update({
+   description,
+   updated_at:new Date().toISOString()
+  }).eq("id",selected.id).select("*").single();
+  if(error)throw error;
+  selected=data;
+  const idx=surveys.findIndex(x=>x.id===data.id);if(idx>=0)surveys[idx]=data;
+  note("descriptionMessage","填報說明已更新。","success");
+ }catch(e){note("descriptionMessage","儲存填報說明失敗："+e.message,"error");}
+ finally{btn.disabled=false;}
+}
 async function selectSurvey(id){
  const s=surveys.find(x=>x.id===id);if(!s)return;selected=s;$("editor").classList.remove("hidden");
  $("editTitle").textContent=s.title;$("editMeta").textContent=s.target_year+"年度｜"+new Date(s.opens_at).toLocaleString("zh-TW")+" 至 "+new Date(s.closes_at).toLocaleString("zh-TW");
  $("publicUrl").value=location.origin+location.pathname.replace(/admin\.html$/,"")+"?token="+s.public_token;
- $("editOpen").value=localInputValue(s.opens_at);$("editClose").value=localInputValue(s.closes_at);note("scheduleMessage","","");
+ $("editOpen").value=localInputValue(s.opens_at);$("editClose").value=localInputValue(s.closes_at);$("editDescription").value=s.description||"";note("scheduleMessage","","");note("descriptionMessage","","");
  $("publishState").textContent=s.is_published?"已發布":"未發布";$("publishState").className="status "+(s.is_published?"":"off");$("togglePublish").textContent=s.is_published?"停止發布":"發布問卷";
  await Promise.all([loadAssignments(),loadQuestions(),loadResults()]);
 }
@@ -461,6 +480,7 @@ $("addQuestion").addEventListener("click",addQuestion);
 $("cancelQuestionEdit").addEventListener("click",()=>cancelQuestionEdit());
 $("togglePublish").addEventListener("click",togglePublish);
 $("saveSchedule").addEventListener("click",saveSchedule);
+$("saveDescription").addEventListener("click",saveDescription);
 $("exportCsv").addEventListener("click",exportCsv);
 $("copyUrl").addEventListener("click",async()=>{try{await navigator.clipboard.writeText($("publicUrl").value);note("publishHint","已複製填答網址。","success");}catch(e){$("publicUrl").select();document.execCommand("copy");note("publishHint","已複製填答網址。","success");}});
 init().catch(e=>{console.error(e);$("identity").textContent="登入或初始化失敗";note("notice",e.message||String(e),"error");});
