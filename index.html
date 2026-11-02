@@ -48,7 +48,7 @@ const IMAGE_BASE=SUPABASE_URL+"/storage/v1/object/public/general-survey-images/"
 const db=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 const token=new URLSearchParams(location.search).get("token");
 const $=id=>document.getElementById(id);
-let surveyData=null, currentUnitId="", busy=false;
+let surveyData=null, currentUnitId="", busy=false, hasPreviousSubmission=false;
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function imageUrl(path){return path?IMAGE_BASE+path.split("/").map(encodeURIComponent).join("/"):"";}
 function setMessage(msg,type){$("message").className="hint "+(type||"");$("message").textContent=msg||"";}
@@ -130,6 +130,7 @@ async function loadUnitData(){
   const unitId=$("unit").value;currentUnitId=unitId;
   $("questions").innerHTML="";
   $("submitter").value="";
+  hasPreviousSubmission=false;
   if(!unitId||!surveyData)return;
   try{
     const {data,error}=await db.rpc("general_survey_public_info",{p_token:token,p_unit_id:Number(unitId)});
@@ -137,10 +138,10 @@ async function loadUnitData(){
     if(!data||!data.ok)throw new Error(data?.message||"讀取填報資料失敗。");
     const previous=data.previous_submission||null;
     const answerMap=new Map((previous?.answers||[]).map(a=>[a.question_id,a.answer]));
-    if(previous)$("submitter").value=previous.submitter_name||"";
+    hasPreviousSubmission=!!previous;
     surveyData.questions.forEach(q=>$("questions").appendChild(renderQuestion(q,answerMap.has(q.id)?answerMap.get(q.id):null)));
     $("submitBtn").textContent=previous?"確認更改並送出":"送出填報資料";
-    setMessage(previous?"本單位已有填報紀錄，已帶入上次填寫內容。請由原填寫人確認或修改後再送出。":"請填寫本單位本年度預估需求。","success");
+    setMessage(previous?"本單位已有填報紀錄，已帶入上次各題答案。請原填寫人輸入姓名核對後再修改送出。":"請填寫本單位本年度預估需求。","success");
   }catch(e){setMessage(e.message||"讀取資料失敗。","error");}
 }
 async function init(){
@@ -177,10 +178,12 @@ async function submit(){
     const {data,error}=await db.rpc("general_survey_submit",{p_token:token,p_unit_id:Number(currentUnitId),p_submitter_name:name,p_answers:answers});
     if(error)throw error;
     if(!data||!data.ok)throw new Error(data?.message||"送出失敗。");
-    setMessage("資料已成功送出。您仍可在截止前再次修改及提交。","success");
+    const wasUpdate=hasPreviousSubmission;
+    alert(wasUpdate?"修改成功！本單位填報資料已更新。":"填報成功！本單位資料已完成送出。");
+    setMessage(wasUpdate?"資料已成功修改。":"資料已成功送出。","success");
     await loadUnitData();
-  }catch(e){console.error(e);setMessage("送出失敗："+(e.message||String(e)),"error");}
-  finally{busy=false;$("submitBtn").disabled=false;$("submitBtn").textContent="送出填報資料";}
+  }catch(e){console.error(e);const msg=e.message||String(e);alert("送出失敗："+msg);setMessage("送出失敗："+msg,"error");}
+  finally{busy=false;$("submitBtn").disabled=false;$("submitBtn").textContent=hasPreviousSubmission?"確認更改並送出":"送出填報資料";}
 }
 init();
 })();
