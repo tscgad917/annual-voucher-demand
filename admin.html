@@ -268,7 +268,7 @@ function cancelQuestionEdit(showNote=true){
 async function addQuestion(){
  const title=$("qTitle").value.trim(),type=$("qType").value;
  if(!title){note("questionMessage","請輸入題目或品項名稱。","error");return;}
- const optionsText=$("qOptions").value.split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean);
+ const optionsText=$("qOptions").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
  if((type==="single_choice"||type==="multiple_choice")&&!optionsText.length){note("questionMessage","單選或多選題至少需要一個選項。","error");return;}
  const btn=$("addQuestion");btn.disabled=true;let imagePath=null;
  try{
@@ -360,7 +360,7 @@ async function loadQuestions(){
   editingQuestionId=q.id;
   $("qTitle").value=q.title||"";$("qDescription").value=q.description||"";
   $("qType").value=q.question_type||"number";$("qUnit").value=q.settings?.unit_label||"";
-  $("qOptions").value=(opts||[]).map(o=>o.label).join("\\n");
+  $("qOptions").value=(opts||[]).map(o=>o.label).join("\n");
   $("qRequired").checked=!!q.is_required;$("qAllowOther").checked=!!q.settings?.allow_other;
   $("qImage").value="";$("addQuestion").textContent="儲存題目修改";$("cancelQuestionEdit").classList.remove("hidden");
   note("questionMessage","正在編輯「"+q.title+"」。修改後按「儲存題目修改」；不選圖片即保留原圖片。","success");
