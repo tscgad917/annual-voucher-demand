@@ -201,6 +201,9 @@ begin
       from public.general_survey_units su
       join public.units u on u.id = su.unit_id
       where su.survey_id = v_survey.id
+        and v_survey.is_published
+        and now() >= v_survey.opens_at
+        and now() <= v_survey.closes_at
     ), '[]'::jsonb),
     'questions', coalesce((
       select jsonb_agg(
@@ -225,6 +228,9 @@ begin
       )
       from public.general_survey_questions q
       where q.survey_id = v_survey.id
+        and v_survey.is_published
+        and now() >= v_survey.opens_at
+        and now() <= v_survey.closes_at
     ), '[]'::jsonb),
     'submission', case when p_unit_id is null then null else exists (
       select 1
