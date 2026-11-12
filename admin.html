@@ -410,13 +410,27 @@ async function loadResults(){
 }
 function formatAnswer(a){if(a==null)return "—";if(Array.isArray(a))return a.join("、");if(typeof a==="object"){if(a.choice==="__other__")return "其他："+(a.other||"");return JSON.stringify(a);}return String(a);}
 function csvCell(v){let s=String(v==null?"":v);if(/^[=+@\\-\\t\\r]/.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"';}
-function exportCsv(){
- const names=new Map(units.map(u=>[u.id,u.name])),byUnit=new Map(submissions.map(s=>[s.unit_id,s]));
- const head=["年度","問卷名稱","填報單位","填報人","最後提交時間",...questions.map(q=>q.title)];
- const rows=[head];
- assignments.forEach(a=>{const s=byUnit.get(a.unit_id),ans=new Map((s?.general_survey_answers||[]).map(x=>[x.question_id,x.answer]));rows.push([selected.target_year,selected.title,names.get(a.unit_id)||a.unit_id,s?.submitter_name||"",s?.submitted_at||"",...questions.map(q=>formatAnswer(ans.get(q.id)))]);});
- const csv="\uFEFF"+rows.map(r=>r.map(csvCell).join(",")).join("\r\n");
- const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}),url=window.URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=selected.target_year+"年度問卷填報結果.csv";a.click();window.URL.revokeObjectURL(url);
+async function exportCsv(){
+ try{
+  if(!selected){alert("請先選擇問卷。");return;}
+  const latestByUnit=new Map();
+  [...submissions].sort((a,b)=>new Date(b.submitted_at)-new Date(a.submitted_at)).forEach(s=>{if(!latestByUnit.has(s.unit_id))latestByUnit.set(s.unit_id,s);});
+  const submissionIds=[...latestByUnit.values()].map(s=>s.id);
+  let answerRows=[];
+  if(submissionIds.length){
+   const {data,error}=await db.from("general_survey_answers").select("submission_id,question_id,answer").in("submission_id",submissionIds);
+   if(error)throw error;
+   answerRows=data||[];
+  }
+  const answersBySubmission=new Map();
+  answerRows.forEach(x=>{if(!answersBySubmission.has(x.submission_id))answersBySubmission.set(x.submission_id,new Map());answersBySubmission.get(x.submission_id).set(x.question_id,x.answer);});
+  const names=new Map(units.map(u=>[u.id,u.name]));
+  const head=["年度","問卷名稱","填報單位","填報人","最後提交時間",...questions.map(q=>q.title)];
+  const rows=[head];
+  assignments.forEach(a=>{const unitId=a.unit_id,s=latestByUnit.get(unitId),ans=answersBySubmission.get(s?.id)||new Map();rows.push([selected.target_year,selected.title,""+(names.get(unitId)||a.units?.name||unitId),s?.submitter_name||"",s?.submitted_at||"",...questions.map(q=>formatAnswer(ans.get(q.id)))]);});
+  const csv="\uFEFF"+rows.map(r=>r.map(csvCell).join(",")).join("\r\n");
+  const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}),url=window.URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=selected.target_year+"年度問卷填報結果.csv";a.click();window.URL.revokeObjectURL(url);
+ }catch(e){alert("匯出失敗："+e.message);}
 }
 async function togglePublish(){
  const next=!selected.is_published;
